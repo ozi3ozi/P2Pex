@@ -10,9 +10,12 @@ const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { ethers } = require("hardhat");
 
 //String errors returned by contract functions
-const DOESNT_EXIST = "Provider doesn't exist";
-const ALREADY_EXISTS = "Provider already exists";
-const MAX_REACHED = "Max allowed reached";
+  const PROVIDER_ERROR = "provider error";
+  const PYMT_MTHD_ERROR = "payment method error";
+  const MAX_REACHED = "Max allowed reached";
+  const LTE_TO_4HOURS = "Must be 4 hours or less";
+  const TRANSFER_FAILED = "Transfer failed";
+  const TOO_MANY = "Too many";
 
 //properties names for provider
 const myAddress = "myAddress";
@@ -105,7 +108,7 @@ describe("P2pEx contract", function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
         
         await p2pExContract.connect(tstOwner).addProvider();
-        await expect(p2pExContract.connect(tstOwner).addProvider()).to.be.revertedWith(ALREADY_EXISTS);
+        await expect(p2pExContract.connect(tstOwner).addProvider()).to.be.revertedWith(PROVIDER_ERROR);
       });
 
       it("Should add new provider to providers mapping", async function () {
@@ -143,7 +146,7 @@ describe("P2pEx contract", function () {
       it("Deleting revert if provider matching msg.sender is not found", async function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
         
-        await expect(p2pExContract.connect(tstOwner).deleteProvider()).to.be.revertedWith(DOESNT_EXIST);
+        await expect(p2pExContract.connect(tstOwner).deleteProvider()).to.be.revertedWith(PROVIDER_ERROR);
       });
 
       it("If found. Should delete provider that matches msg.sender from providers mapping", async function () {
@@ -163,39 +166,187 @@ describe("P2pEx contract", function () {
       });
     });
 
-    describe("addPaymtMthd()", async function () {
-      const mockPymtMthd = "payment method**currencies accepted**transfer details";
-      it("Should revert if provider matching msg.sender is not found", async function () {
-        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
-        
-        await expect(p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd)).to.be.revertedWith(DOESNT_EXIST);
+    describe("provider.paymtMthds CRUD", async function () {
+      //always length of 3: [_name, _acceptedCurrencies, _transferInfo]
+      const mockPymtMthd1 = ["payment method", "currencies accepted", "transfer details"];
+      const mockPymtMthd2 = ["payment method", "MAD USD CNY EUR", "transfer details"];
+      describe("addPaymtMthd()", async function () {
+
+        it("param _paymtMthd[1] which is the accepted currencies should only contain words consisting of 3 uppercase letters."), async function () {
+          //To be implemented on the frontend
+
+          // acceptedCurrencies = mockPymtMthd1[1];
+          // expect(acceptedCurrencies).to.not.match(/^(?:\b[A-Z]{3}\b\s*)+$/);
+          // acceptedCurrencies = mockPymtMthd2[1];
+          // expect(acceptedCurrencies).to.match(/^(?:\b[A-Z]{3}\b\s*)+$/);
+          
+        };
+
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should increase paymtMethods length.", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))).to.have.lengthOf(2);
+        });
+
+        it("param _details should match provider's last added pymtMthd.", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][0]).to.equal(mockPymtMthd1[0]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][1]).to.equal(mockPymtMthd1[1]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][2]).to.equal(mockPymtMthd1[2]);
+        });
+
+        it("Should revert if max number of payment methods allowed reached", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          for (let i = 0; i < MAX_PAYMT_MTHDS; i++) {
+            await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          }
+          await expect(p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1)).to.be.revertedWith(MAX_REACHED);
+        });
       });
 
-      it("Should revert if max payment methods allowed reached", async function () {
-        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+      describe("removePaymtMthd(_index)", async function () {
+
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(tstOwner).removePaymtMthd(1)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should revert if _index >= paymtMethds.length", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await expect(p2pExContract.connect(tstOwner).removePaymtMthd(1)).to.be.revertedWith(PYMT_MTHD_ERROR);
+        });
+
+        it("Should remove the payment method", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).removePaymtMthd(0);
+          await expect(p2pExContract.connect(tstOwner).removePaymtMthd(0)).to.be.revertedWith(PYMT_MTHD_ERROR);
+        });
+
+        it("Should reduce paymtMethds.length by 1", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).removePaymtMthd(0);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))).to.have.lengthOf(0);
+        });
         
-        await p2pExContract.connect(tstOwner).addProvider();
-        for (let i = 0; i < MAX_PAYMT_MTHDS; i++) {
-          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd);
-        }
-        await expect(p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd)).to.be.revertedWith(MAX_REACHED);
       });
 
-      it("Should increase paymtMethods length.", async function () {
-        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+      describe("updatePaymtMthd(_index, _newDetails)", async function () {
+
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(tstOwner).updatePaymtMthd(0, mockPymtMthd1)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should revert if _index >= paymtMethds.length", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await expect(p2pExContract.connect(tstOwner).updatePaymtMthd(1, mockPymtMthd2)).to.be.revertedWith(PYMT_MTHD_ERROR);
+        });
+
+        it("Should update the payment method."), async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).updatePaymtMthd(0, mockPymtMthd2);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][0]).to.equal(mockPymtMthd2[0]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][1]).to.equal(mockPymtMthd2[1]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][2]).to.equal(mockPymtMthd2[2]);
+        };
+
+        it("Should revert if _newDetails[1] aka currencies accepeted contains words not consisting of 3 uppercase letters.", async function () {
+          
+        });
+
+        it("Should not change paymtMethds.length", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).updatePaymtMthd(0, mockPymtMthd2);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))).to.have.lengthOf(1);
+        });
         
-        await p2pExContract.connect(tstOwner).addProvider();
-        await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd);
-        await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd);
-        expect((await p2pExContract.getProvider(tstOwner.address)).paymtMthds).to.have.lengthOf(2);
       });
 
-      it("param _paymtMthd should match regex.", async function () {
+      describe("updateAllPaymtMthds(_newPymtMthds)", async function () {
+
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(tstOwner).updateAllPaymtMthds([mockPymtMthd1, mockPymtMthd2])).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should revert if _newPymtMthds.length >= paymtMethds.length", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          let newPymtMthds = [mockPymtMthd2, mockPymtMthd1, mockPymtMthd1];
+          await expect(p2pExContract.connect(tstOwner).updateAllPaymtMthds(newPymtMthds)).to.be.revertedWith(PYMT_MTHD_ERROR);
+        });
+
+        it("Should update the all payment methods."), async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd2);
+          let newPymtMthds = [mockPymtMthd2, mockPymtMthd1];
+          await p2pExContract.connect(tstOwner).updateAllPaymtMthds(newPymtMthds);
+
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][0]).to.equal(mockPymtMthd2[0]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][1]).to.equal(mockPymtMthd2[1]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[0][2]).to.equal(mockPymtMthd2[2]);
+
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[1][0]).to.equal(mockPymtMthd1[0]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[1][1]).to.equal(mockPymtMthd1[1]);
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))[1][2]).to.equal(mockPymtMthd1[2]);
+        };
+
+        it("Should not change paymtMethds.length", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+          
+          await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd1);
+          await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd2);
+          let newPymtMthds = [mockPymtMthd2, mockPymtMthd1];
+          await p2pExContract.connect(tstOwner).updateAllPaymtMthds(newPymtMthds);
+
+          expect((await p2pExContract.getPymtMthds(tstOwner.address))).to.have.lengthOf(2);
+        });
         
       });
     });
 
-    describe("<bool isAvailable> CRUD", function () {
+    describe("<provider.isAvailable CRUD", function () {
       it("Should always return provider <bool isAvailable> as false when provider added for the first time", async function() {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
 
@@ -225,10 +376,10 @@ describe("P2pEx contract", function () {
         expect(await p2pExContract.getAvailability(addr1.address)).to.equal(false);
       });
       
-      it("update availability should revert with 'Provider doesn't exist' if address is not a provider", async function () {
+      it("update availability should revert if provider matching msg.sender is not found", async function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
         //addr2 is not a provider
-        await expect(p2pExContract.connect(addr2).becomeAvailable()).to.be.revertedWith(DOESNT_EXIST);
+        await expect(p2pExContract.connect(addr2).becomeAvailable()).to.be.revertedWith(PROVIDER_ERROR);
       });
 
       it("Should becomeAvailable() only if provider has at least one deposit in <mapping tradeableAmountByTokenByProvider>", async function () {
@@ -263,7 +414,7 @@ describe("P2pEx contract", function () {
       expect(await p2pExContract.getProvidersCount()).to.equal(0);
 
       await tstTokenContract.connect(tstOwner).approve(p2pExContract.address, 100);
-      await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(DOESNT_EXIST);
+      await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
 
       await p2pExContract.connect(tstOwner).addProvider();
       await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
@@ -271,7 +422,7 @@ describe("P2pEx contract", function () {
       expect(await p2pExContract.getProvider(tstOwner.address)).to.have.property(myAddress, tstOwner.address);
 
       await tstTokenContract.connect(p2pExOwner).approve(p2pExContract.address, 100);
-      await expect(p2pExContract.connect(p2pExOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(DOESNT_EXIST);
+      await expect(p2pExContract.connect(p2pExOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
 
       await p2pExContract.connect(p2pExOwner).addProvider();
       await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, p2pExOwner);
