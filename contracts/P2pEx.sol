@@ -25,21 +25,31 @@ contract P2pEx is Ownable {
         //List of tokens that are deposited in contract with balance > 0
         address[] currTradedTokens;
     }
-    //String errors returned by contract functions
+
+//Providers props
+    mapping(address => Provider) private providers;
+    //      (Provider =>         (Token => tradeableAmount)). 
+    mapping (address => mapping (address => uint)) private tradeableAmountByTokenByProvider;
+    //tracks addresses of registered providers. Not always up-to-date. Needs updateProvidersAddrs() to be run to be up-to-date.
+    address[] private providersAddrs;
+    //tracks number of currently registered providers. Updated after each addition or deletion. Always up-to-date.
+    uint private registeredProvidersCount;
+    //Max allowed time for a provider to send the tokens to the receiver after it has been marked 'PAID'(fiat sent) by the latter 
+    int private maxTimeLimit = 4 hours;
+    // Contract's list of accepted tokens
+    address[] private tradeableTokens;
+
+//String errors returned by contract functions
     string constant PROVIDER_ERROR = "provider error";
     string constant PYMT_MTHD_ERROR = "payment method error";
     string constant MAX_REACHED = "Max allowed reached";
     string constant LTE_TO_4HOURS = "Must be 4 hours or less";
     string constant TRANSFER_FAILED = "Transfer failed";
     string constant TOO_MANY = "Too many";
+    string constant BALANCE_ERROR = "balance error";
+    string constant ZERO_DEPOSITS_ERROR = "0 deposits error";
+    string constant HAS_DEPOSITS_ERROR = "has deposits error";
     uint8 constant MAX_PAYMT_MTHDS = 32;
-    int private maxTimeLimit = 4 hours;
-
-    mapping(address => Provider) private providers;
-    //tracks addresses of registered providers. Not always up-to-date. Needs updateProvidersAddrs() to be run to be up-to-date.
-    address[] private providersAddrs;
-    //tracks number of currently registered providers. Updated after each addition or deletion. Always up-to-date.
-    uint private registeredProvidersCount;
 
     //*************************************************//
     //                  PURE FUNCTIONS                //
@@ -47,6 +57,49 @@ contract P2pEx is Ownable {
     //                   PURE FUNCTIONS                 //
     //*************************************************//
 
+
+//                  HELPER FUNCTIONS                //
+
+    
+    function providerExists(address _provider) public view returns (bool) {
+        return providers[_provider].myAddress == _provider;
+    }
+
+    /**
+     * @dev 
+     * @param _provider provider address
+     */
+    function hasAtLeastOneDeposit(address _provider) public view returns (bool) {
+        address[] memory tknList = providers[_provider].currTradedTokens;
+
+        return providerExists(_provider) && tknList.length > 0 && tradeableAmountByTokenByProvider[_provider][tknList[0]] > 0;
+    }
+//*************************************************//
+
+//                    MODIFIERS                     //
+
+    modifier onlyProvider() {
+        require(providerExists(_msgSender()), PROVIDER_ERROR);
+        _;
+    }
+
+    modifier isProvider(address _provider) {
+        require(providerExists(_provider), PROVIDER_ERROR);
+        _;
+    }
+
+    modifier hasDeposit() {
+        require(hasAtLeastOneDeposit(_msgSender()), ZERO_DEPOSITS_ERROR);
+        _;
+    }
+
+    modifier hasPymtMthd(uint8 _mthdIndex) {
+        require(providers[_msgSender()].paymtMthds.length > _mthdIndex, PYMT_MTHD_ERROR);
+        _;
+    }
+//*************************************************//
+
+//              GET PROVIDER(S) FUNCTIONS           //
     /**
      * @dev Because providersAddrs is not always up-to-date, we check for address(0) addresses
      * @return currentProvidersAddys
@@ -68,11 +121,11 @@ contract P2pEx is Ownable {
         return registeredProvidersCount;
     }
 
-    function getProvider(address _addr) public view returns (Provider memory) {
+    function getProvider(address _addr) public view isProvider(_addr) returns (Provider memory) {
         return providers[_addr];
     }
 
-    function getProviderAddy(address _addr) public view returns (address) {
+    function getProviderAddy(address _addr) public view isProvider(_addr) returns (address) {
         return providers[_addr].myAddress;
     }
 
@@ -122,103 +175,14 @@ contract P2pEx is Ownable {
 
         return counter;
     }
-    
-    function providerExists() public view returns (bool) {
-        return providers[_msgSender()].myAddress == _msgSender();
-    }
+//*************************************************//
 
-    modifier onlyProvider() {
-        require(providerExists(), PROVIDER_ERROR);
-        _;
-    }
-
-    function addProvider() public {
-        require(!providerExists(), PROVIDER_ERROR);
+//             ADD UPDATE DELETE PROVIDER           //
+    function addProvider() public { // TESTED
+        require(!providerExists(_msgSender()), PROVIDER_ERROR);
         providers[_msgSender()] = Provider(_msgSender(), false, maxTimeLimit, new string[][](0), new address[](0));
         providersAddrs.push(_msgSender());
         registeredProvidersCount++;
-    }
-
-    //*************************************************//
-    //            isAvailable CRUD Start              //
-
-    function getAvailability(address provider) external view returns (bool) {
-        return providers[provider].isAvailable;
-    }
-
-    function becomeAvailable() external onlyProvider {
-        if (hasAtLeastOneDeposit(_msgSender())) {
-            updateAvailability(true);
-        }
-    }
-
-    function becomeUnavailable() external onlyProvider {
-        updateAvailability(false);
-    }
-
-    function updateAvailability(bool _isAvailable) internal {
-        providers[_msgSender()].isAvailable = _isAvailable;
-    }
-
-    //            isAvailable CRUD End                  //
-    //*************************************************//
-
-    //*************************************************//
-    //            paymtMthds CRUD Start               //
-
-    function getPymtMthds(address _provider) public view returns (string[][] memory) {
-        return providers[_provider].paymtMthds;
-    }
-
-    /**
-     * @dev list for payment method details. always length of 3: [_name, _acceptedCurrencies, _transferInfo]
-     * _name like Google pay
-     * _acceptedCurrencies should only contain words consisting of 3 uppercase letters. Front end validation with Regex ^(?:\b[A-Z]{3}\b\s*)+$
-     * _transferInfo like an email or account number
-     * @param _details always length of 3: [_name, _acceptedCurrencies, _transferInfo]
-     */
-    function addPaymtMthd(string[] memory _details) public onlyProvider {
-        require(providers[_msgSender()].paymtMthds.length < MAX_PAYMT_MTHDS, MAX_REACHED);
-        providers[_msgSender()].paymtMthds.push([_details[0], _details[1], _details[2]]);
-    }
-
-    /**
-     * 
-     * @param _index of payment method to remove
-     */
-    function removePaymtMthd(uint8 _index) public onlyProvider {
-        string[][] storage paymtMthds = providers[_msgSender()].paymtMthds;
-        require(paymtMthds.length > _index, PYMT_MTHD_ERROR);
-        paymtMthds[_index] = paymtMthds[paymtMthds.length - 1];
-        paymtMthds.pop();
-    }
-
-    /**
-     * 
-     * @param _index of payment method to update
-     * @param _newDetails of payment method to update
-     */
-    function updatePaymtMthd(uint8 _index, string[] memory _newDetails) public onlyProvider {
-        require(providers[_msgSender()].paymtMthds.length > _index, PYMT_MTHD_ERROR);
-        providers[_msgSender()].paymtMthds[_index] = _newDetails;
-    }
-
-    /**
-     * 
-     * @param _newPymtMthds of payment method to update
-     */
-    function updateAllPaymtMthds(string[][] memory _newPymtMthds) public onlyProvider {
-        require(providers[_msgSender()].paymtMthds.length > _newPymtMthds.length - 1, PYMT_MTHD_ERROR);
-        providers[_msgSender()].paymtMthds = _newPymtMthds;
-    }
-
-
-    //             paymtMthds CRUD End                  //
-    //*************************************************//
-
-    function updateTimeLimit(int _timeLimit) public onlyProvider {
-        require(_timeLimit <= 4, LTE_TO_4HOURS);
-        providers[_msgSender()].autoCompleteTimeLimit = _timeLimit;
     }
 
     function updateProvider(bool _isAvailable, int _timeLimit, string[][] memory _paymtMthds) public onlyProvider {
@@ -227,10 +191,94 @@ contract P2pEx is Ownable {
         updateAllPaymtMthds(_paymtMthds);
     }
 
-    function deleteProvider() public onlyProvider {
+    function deleteProvider() public onlyProvider { // TESTED
+        require(!hasAtLeastOneDeposit(_msgSender()), HAS_DEPOSITS_ERROR);
+        // delete from mapping tradeableAmountByTokenByProvider
         delete providers[_msgSender()];
         registeredProvidersCount--;
     }
+//*************************************************//
+
+//                 isAvailable CRUD                 // TESTED
+
+    function getAvailability(address provider) external view returns (bool) {
+        return providers[provider].isAvailable;
+    }
+
+    function becomeAvailable() external onlyProvider hasDeposit { // TESTED
+        updateAvailability(true);
+    }
+
+    function becomeUnavailable() external onlyProvider { // TESTED
+        updateAvailability(false);
+    }
+
+    function updateAvailability(bool _isAvailable) internal { // TESTED INDIRECTLY
+        providers[_msgSender()].isAvailable = _isAvailable;
+    }
+//*************************************************//
+
+//           autoCompleteTimeLimit Start            //
+    function updateTimeLimit(int _timeLimit) public onlyProvider {
+        require(_timeLimit <= 4, LTE_TO_4HOURS);
+        providers[_msgSender()].autoCompleteTimeLimit = _timeLimit;
+    }
+//*************************************************//
+
+//                 paymtMthds CRUD                  // TESTED
+
+    function getPymtMthds(address _provider) public view isProvider(_provider) returns (string[][] memory) { // TESTED
+        return providers[_provider].paymtMthds;
+    }
+
+    /**
+     * @dev list for payment method details. always length of 3: [_name, _acceptedCurrencies, _transferInfo]
+     * _name like Google pay
+     * _acceptedCurrencies should only contain words consisting of 3 uppercase letters. Front end validation with Regex ^(?:\b[A-Z]{3}\b\s*)+$
+     * _transferInfo like an email or account number
+     * @param _newpymtMthd always length of 3: [_name, _acceptedCurrencies, _transferInfo]
+     */
+    function addPaymtMthd(string[] memory _newpymtMthd) public onlyProvider { // TESTED
+        require(providers[_msgSender()].paymtMthds.length < MAX_PAYMT_MTHDS, MAX_REACHED);
+        providers[_msgSender()].paymtMthds.push([_newpymtMthd[0], _newpymtMthd[1], _newpymtMthd[2]]);
+    }
+
+    /**
+     * 
+     * @param _mthdIndex of payment method to remove
+     */
+    function removePaymtMthd(uint8 _mthdIndex) public onlyProvider hasPymtMthd(_mthdIndex) { // TESTED
+        string[][] storage paymtMthds = providers[_msgSender()].paymtMthds;
+        paymtMthds[_mthdIndex] = paymtMthds[paymtMthds.length - 1];
+        paymtMthds.pop();
+    }
+
+    /**
+     * 
+     * @param _mthdIndex of payment method to update
+     * @param _newPymtMthd of payment method to update
+     */
+    function updatePaymtMthd(uint8 _mthdIndex, string[] memory _newPymtMthd) public onlyProvider hasPymtMthd(_mthdIndex) { // TESTED
+        providers[_msgSender()].paymtMthds[_mthdIndex] = _newPymtMthd;
+    }
+
+    /**
+     * 
+     * @param _newPymtMthds of payment method to update
+     */
+    function updateAllPaymtMthds(string[][] memory _newPymtMthds) public onlyProvider { // TESTED
+        require(providers[_msgSender()].paymtMthds.length == _newPymtMthds.length, PYMT_MTHD_ERROR);
+        providers[_msgSender()].paymtMthds = _newPymtMthds;
+    }
+//*************************************************//
+
+//              currTradedTokens CRUD              //
+
+    function getCurrTradedToken(address _provider) external view onlyProvider returns (address[] memory) {
+        return providers[_provider].currTradedTokens;
+    }
+
+//*************************************************//
 
     //update frequency to be be determined. Can also be OwnerOnly function
     function updateProvidersAddrs() public {
@@ -242,19 +290,7 @@ contract P2pEx is Ownable {
             }
         }
     }
-
-    function hasAtLeastOneDeposit(address _provider) public view returns (bool) {
-        address[] memory tknList = providers[_provider].currTradedTokens;
-        uint tknListSize = tknList.length;
-        
-        for (uint i = 0; i < tknListSize; i++) {
-            if (tradeableAmountByTokenByProvider[_provider][tknList[i]] > 0) {
-                return true;
-            }
-        }
-
-        return false;
-    }
+//*************************************************//
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -262,13 +298,8 @@ contract P2pEx is Ownable {
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    // List of accepted tokens
-    address[] private tradeableTokens;
-    //      (Provider =>         (Token => tradeableAmount)). 
-    mapping (address => mapping (address => uint)) private tradeableAmountByTokenByProvider;
-
-    /////////////////////////////////////////////////////
-    //////////// tradeableTokens CRUD start /////////////
+//*************************************************//
+//           tradeableTokens CRUD start           //
 
     function getTradeableTokens() public view returns (address[] memory) {
         return tradeableTokens;
@@ -283,8 +314,8 @@ contract P2pEx is Ownable {
         // get providers that still have the token deposited in contract
         // send it back to their wallets  
     }
-    //////////// tradeableTokens CRUD end ///////////////
-    /////////////////////////////////////////////////////
+//////////// tradeableTokens CRUD end ///////////////
+/////////////////////////////////////////////////////
 
     function balanceOf(address _token) public view returns (uint256){
         return IERC20(_token).balanceOf(address(this));
@@ -298,7 +329,7 @@ contract P2pEx is Ownable {
         require(IERC20(_token).transferFrom(_msgSender(), address(this), _tradeAmount), TRANSFER_FAILED);
         tradeableAmountByTokenByProvider[_msgSender()][_token] = _tradeAmount;
 
-        if (!providerExists()) {
+        if (!providerExists(_msgSender())) {
             addProvider();
         }
         providers[_msgSender()].currTradedTokens.push(_token);
@@ -319,8 +350,8 @@ contract P2pEx is Ownable {
          */
     }
 
-    /////////////////////////////////////////////////////
-    /////////// Chainlink price feed Code start ////////
+//*************************************************//
+//          Chainlink price feed Code start       //
 
     /**
      * @notice Returns the latest price
@@ -331,7 +362,4 @@ contract P2pEx is Ownable {
         ( , int256 price, , , ) = AggregatorV3Interface(_priceFeed).latestRoundData();
         return price;
     }
-
-    /////////// Chainlink price feed Code end ////////////
-    /////////////////////////////////////////////////////
 }
