@@ -27,6 +27,8 @@ contract P2pEx is Ownable {
     }
 
 //Providers props
+    // For each provider, each token is mapped to its index from provider.currTradedTokens
+    mapping (address => mapping (address => uint)) private idxOfCurrTradedTokensByProvider;
     mapping(address => Provider) private providers;
     //      (Provider =>         (Token => tradeableAmount)). 
     mapping (address => mapping (address => uint)) private tradeableAmountByTokenByProvider;
@@ -37,7 +39,9 @@ contract P2pEx is Ownable {
     //Max allowed time for a provider to send the tokens to the receiver after it has been marked 'PAID'(fiat sent) by the latter 
     int private maxTimeLimit = 4 hours;
     // Contract's list of accepted tokens
-    address[] private tradeableTokens;
+    address[] private tradeableTokensLst;
+    // Each token is mapped to its index from tradeableTokensLst
+    mapping (address => uint) private tradeableTokens;
 
 //String errors returned by contract functions
     string constant PROVIDER_ERROR = "provider error";
@@ -49,6 +53,7 @@ contract P2pEx is Ownable {
     string constant BALANCE_ERROR = "balance error";
     string constant ZERO_DEPOSITS_ERROR = "0 deposits error";
     string constant HAS_DEPOSITS_ERROR = "has deposits error";
+    string constant TOKEN_ERROR = "Token error";
     uint8 constant MAX_PAYMT_MTHDS = 32;
 
     //*************************************************//
@@ -95,6 +100,11 @@ contract P2pEx is Ownable {
 
     modifier hasPymtMthd(uint8 _mthdIndex) {
         require(providers[_msgSender()].paymtMthds.length > _mthdIndex, PYMT_MTHD_ERROR);
+        _;
+    }
+
+    modifier isTradeable(address _token) {
+        require(tradeableTokens[_token] != 0, TOKEN_ERROR);
         _;
     }
 //*************************************************//
@@ -274,8 +284,32 @@ contract P2pEx is Ownable {
 
 //              currTradedTokens CRUD              //
 
-    function getCurrTradedToken(address _provider) external view onlyProvider returns (address[] memory) {
+    function getCurrTradedTokens(address _provider) external view returns (address[] memory) {
         return providers[_provider].currTradedTokens;
+    }
+
+    function getCurrTradedTokenIndex(address _token, address _provider) public view isProvider(_provider) isCurrTraded(_token) returns (uint) {
+        return idxOfCurrTradedTokensByProvider[_provider][_token] - 1;
+    }
+
+    function addToCurrTradedTokens(address _token) public onlyProvider {
+        if (idxOfCurrTradedTokensByProvider[_msgSender()][_token] == 0) {//Not yet added
+            address[] storage tknLst = providers[_msgSender()].currTradedTokens;
+            tknLst.push(_token);
+            idxOfCurrTradedTokensByProvider[_msgSender()][_token] = tknLst.length;
+        }
+    }
+
+    function removeFromCurrTradedTokens(address _token) public onlyProvider isCurrTraded(_token) {
+        address[] storage tknLst = providers[_msgSender()].currTradedTokens;
+        tknLst[getCurrTradedTokenIndex(_token, _msgSender())] = tknLst[tknLst.length - 1];
+        tknLst.pop();
+        delete idxOfCurrTradedTokensByProvider[_msgSender()][_token]; 
+    }
+
+    modifier isCurrTraded(address _token) {
+        require(idxOfCurrTradedTokensByProvider[_msgSender()][_token] != 0, TOKEN_ERROR);
+        _;
     }
 
 //*************************************************//
@@ -299,40 +333,58 @@ contract P2pEx is Ownable {
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //*************************************************//
-//           tradeableTokens CRUD start           //
+//            tradeableTokensLst CRUD             //
 
-    function getTradeableTokens() public view returns (address[] memory) {
-        return tradeableTokens;
+    function getTradeableTokensLst() public view returns (address[] memory) {
+        return tradeableTokensLst;
     }
 
-    function addTradeableToken(address _newToken) public onlyOwner() {
-        tradeableTokens.push(_newToken);
+    function getTradeableTokenIndex(address _token) public view isTradeable(_token) returns (uint) {// TESTED
+        return tradeableTokens[_token] - 1;
     }
 
-    function removeTokenFromTrade(address _token) public onlyOwner {
-        // remove from tradeableTokens
+    /**
+     * @dev Because tradeableTokens[_NotYetAddedToken] will return 0(default uint value),
+     * we map the new token added to the new length of tradeableTokensLst.
+     * @param _newToken token to be added
+     */
+    function makeTokenTradeable(address _newToken) public onlyOwner() {// TESTED
+        require(tradeableTokens[_newToken] == 0, TOKEN_ERROR);
+        tradeableTokensLst.push(_newToken);
+        tradeableTokens[_newToken] = tradeableTokensLst.length;
+    }
+
+    function removeTokenFromTrade(address _token) public onlyOwner isTradeable(_token) {
+        tradeableTokensLst[getTradeableTokenIndex(_token)] = tradeableTokensLst[tradeableTokensLst.length - 1];
+        tradeableTokensLst.pop();
+        delete tradeableTokens[_token];
         // get providers that still have the token deposited in contract
         // send it back to their wallets  
     }
-//////////// tradeableTokens CRUD end ///////////////
-/////////////////////////////////////////////////////
+//*************************************************//
+
+//*************************************************//
+//               tradeableTokens CRUD             //
+
+//*************************************************//
 
     function balanceOf(address _token) public view returns (uint256){
         return IERC20(_token).balanceOf(address(this));
     }
 
-    function getTradeableAmountByTokenByProvider(address _provider, address _token) public view returns (uint){
+    function getTradeableAmountByTokenByProvider(address _token, address _provider) public view returns (uint){
         return tradeableAmountByTokenByProvider[_provider][_token];
     }
 
-    function depositToTrade(address _token, uint _tradeAmount) external payable onlyProvider {
+    /**
+     * 
+     * @param _token from a drop-down-list generated from tradeableTokensLst.
+     * @param _tradeAmount amount to be deposited in contract.
+     */
+    function depositToTrade(address _token, uint _tradeAmount) external payable onlyProvider isTradeable(_token) {
         require(IERC20(_token).transferFrom(_msgSender(), address(this), _tradeAmount), TRANSFER_FAILED);
-        tradeableAmountByTokenByProvider[_msgSender()][_token] = _tradeAmount;
-
-        if (!providerExists(_msgSender())) {
-            addProvider();
-        }
-        providers[_msgSender()].currTradedTokens.push(_token);
+        tradeableAmountByTokenByProvider[_msgSender()][_token] += _tradeAmount;
+        addToCurrTradedTokens(_token); // Only added if new
     }
 
     function isInTheReservoir() public pure returns (bool) {

@@ -19,6 +19,8 @@ const { ethers } = require("hardhat");
   const BALANCE_ERROR = "balance error";
   const ZERO_DEPOSITS_ERROR = "0 deposits error";
   const HAS_DEPOSITS_ERROR = "has deposits error";
+  const TOKEN_ERROR = "Token error";
+  const ONLY_OWNER_ERROR = "Ownable: caller is not the owner";
 
 // properties names for provider
 const myAddress = "myAddress";
@@ -29,6 +31,7 @@ const currTradedTokens = "currTradedTokens";
 
 // Constants in P2pEx
 const MAX_PAYMT_MTHDS = 32;
+const MOCK_TOKEN_ADDR = 0xb8c77482e45f1f44de1745f52c74426c631bdd52;
 
 // `describe` is a Mocha function that allows you to organize your tests.
 // Having your tests organized makes debugging them easier. All Mocha
@@ -96,6 +99,7 @@ describe("P2pEx contract", function () {
     const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
     await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
     await addProviders(p2pExContract, p2pExOwner, tstOwner, addr1);
+    await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
     await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
     await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, p2pExOwner);
     await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, addr1);
@@ -167,6 +171,7 @@ describe("P2pEx contract", function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
         
         await p2pExContract.connect(tstOwner).addProvider();
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 155, tstOwner);
         await expect(p2pExContract.connect(tstOwner).deleteProvider()).to.be.revertedWith(HAS_DEPOSITS_ERROR);
       });
@@ -405,6 +410,7 @@ describe("P2pEx contract", function () {
           const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
 
           await p2pExContract.connect(tstOwner).addProvider();
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
           await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 300, tstOwner);
           await p2pExContract.connect(tstOwner).becomeAvailable();
 
@@ -459,9 +465,68 @@ describe("P2pEx contract", function () {
         });
       });
     });
-  })
+  });
 
-  describe("Deposit to p2pExContract logic. depositToTrade(_token, _tradeAmount)", function () {
+  describe("Contract's tradeable tokens", function () {
+    describe("makeTokenTradeable(_newToken)", function () {
+      it("Should revert if called by address other than owner", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+        
+        await expect(p2pExContract.connect(tstOwner).makeTokenTradeable(tstTokenContract.address)).to.be.revertedWith(ONLY_OWNER_ERROR);
+      });
+
+      it("Should revert if token is already tradeable", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+        
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+        await expect(p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address)).to.be.revertedWith(TOKEN_ERROR);
+      });
+
+      it("Should add token to tradeableTokensLst and tradeableTokens mapping", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+        
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr1.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+
+        let tstIdx = await p2pExContract.getTradeableTokenIndex(tstTokenContract.address);
+        expect((await p2pExContract.getTradeableTokensLst())[tstIdx]).to.be.equal(tstTokenContract.address);
+      });
+    });
+
+    describe("getTradeableTokenIndex(_token)", function () {
+      it("Should revert if token is not tradeable", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+        
+        await expect(p2pExContract.getTradeableTokenIndex(tstTokenContract.address)).to.be.revertedWith(TOKEN_ERROR);
+      });
+
+      it("Should return the index matchin tradeableTokensLst", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+        
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr1.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr2.address);
+
+        let tstIdx = await p2pExContract.getTradeableTokenIndex(tstTokenContract.address);
+        let addr1Idx = await p2pExContract.getTradeableTokenIndex(addr1.address);
+        let addr2Idx = await p2pExContract.getTradeableTokenIndex(addr2.address);
+
+        expect((await p2pExContract.getTradeableTokensLst())[tstIdx]).to.be.equal(tstTokenContract.address);
+        expect((await p2pExContract.getTradeableTokensLst())[addr1Idx]).to.be.equal(addr1.address);
+        expect((await p2pExContract.getTradeableTokensLst())[addr2Idx]).to.be.equal(addr2.address);
+      });
+    });
+  });
+
+  describe("depositToTrade(_token, _tradeAmount)", function () {
+    it("Should revert if _token is not in p2pExContract's tradeableTokens list.", async function () {
+      const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+      await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
+      await tstTokenContract.connect(tstOwner).approve(p2pExContract.address, 100);
+
+      await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
+    });
+
     it("Should revert if provider matching msg.sender is not found", async function () {
       const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
       await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
@@ -470,53 +535,33 @@ describe("P2pEx contract", function () {
       await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
     });
 
-    // see about testing events. When a deposit is made, we check p2pExReceivedTransferEvent(from, amount) and we compare it with the mapping tradeableAmountByTokenByProvider 
-    it("Balance of p2pExContract should equal total deposits from wallets", async function () {
+    it("Should increase p2pExContract balance of _token by _tradeAmount", async function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
-        totalDeposits = 0;
-        // tstOwner transfers 300 TST to p2pExOwner and addr1 
+        
         await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
         await addProviders(p2pExContract, tstOwner, p2pExOwner, addr1);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
 
+        const balanceBefore = await p2pExContract.balanceOf(tstTokenContract.address);
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
-        totalDeposits += 100;
+        expect(await p2pExContract.balanceOf(tstTokenContract.address)).to.equal(balanceBefore + 100);
+
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 150, p2pExOwner);
-        totalDeposits += 150;
+        expect(await p2pExContract.balanceOf(tstTokenContract.address)).to.equal(balanceBefore + 250);
+
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, addr1);
-        totalDeposits += 200;
-        
-        expect(await p2pExContract.balanceOf(tstTokenContract.address)).to.equal(totalDeposits);
+        expect(await p2pExContract.balanceOf(tstTokenContract.address)).to.equal(balanceBefore + 450);
     });
 
-    it("Should be a provider to deposit to trade.", async function() {
-      const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
-      await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
-
-      expect(await p2pExContract.getProvidersCount()).to.equal(0);
-
-      await p2pExContract.connect(p2pExOwner).addProvider();
-      await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, p2pExOwner);
-      expect(await p2pExContract.getProvidersCount()).to.equal(2);
-      expect(await p2pExContract.getProvider(p2pExOwner.address)).to.have.property(myAddress, p2pExOwner.address);
-    });
-
-    it("tstOwner, p2pExOwner, and addr1 deposit 100, 150 and 200 TST respectively in p2pEx", async function () {
+    it("Should increase provider tradeable amount of _token by _tradeAmount. Mapping is tradeableAmountByTokenByProvider", async function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
-        await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
-        await addProviders(p2pExContract, tstOwner, p2pExOwner, addr1);
-        
+        await p2pExContract.connect(tstOwner).addProvider();
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+
+        balanceBefore = await p2pExContract.getTradeableAmountByTokenByProvider(tstTokenContract.address, tstOwner.address);
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
-        console.log("balance tstOwner: %d", await tstTokenContract.balanceOf(tstOwner.address));
-        expect(await p2pExContract.getTradeableAmountByTokenByProvider(tstOwner.address, tstTokenContract.address)).to.equal(100);
-
-        //Test for p2pExOwner
-        await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 150, p2pExOwner);
-        expect(await p2pExContract.getTradeableAmountByTokenByProvider(p2pExOwner.address, tstTokenContract.address)).to.equal(150);
-
-        //Test for addr1
-        await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, addr1);
-        expect(await p2pExContract.getTradeableAmountByTokenByProvider(addr1.address, tstTokenContract.address)).to.equal(200);
-
+        
+        expect(await p2pExContract.getTradeableAmountByTokenByProvider(tstTokenContract.address, tstOwner.address)).to.be.equal(balanceBefore + 100);
     });
   });
 
