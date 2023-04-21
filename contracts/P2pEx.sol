@@ -47,7 +47,7 @@ contract P2pEx is Ownable {
     string constant PROVIDER_ERROR = "provider error";
     string constant PYMT_MTHD_ERROR = "payment method error";
     string constant MAX_REACHED = "Max allowed reached";
-    string constant LTE_TO_4HOURS = "Must be 4 hours or less";
+    string constant LTD_TO_4HOURS = "Must be 4 hours or less";
     string constant TRANSFER_FAILED = "Transfer failed";
     string constant TOO_MANY = "Too many";
     string constant BALANCE_ERROR = "balance error";
@@ -105,6 +105,11 @@ contract P2pEx is Ownable {
 
     modifier isTradeable(address _token) {
         require(tradeableTokens[_token] != 0, TOKEN_ERROR);
+        _;
+    }
+
+    modifier isCurrTraded(address _token, address _provider) {
+        require(idxOfCurrTradedTokensByProvider[_provider][_token] != 0, TOKEN_ERROR);
         _;
     }
 //*************************************************//
@@ -203,7 +208,7 @@ contract P2pEx is Ownable {
 
     function deleteProvider() public onlyProvider { // TESTED
         require(!hasAtLeastOneDeposit(_msgSender()), HAS_DEPOSITS_ERROR);
-        // delete from mapping tradeableAmountByTokenByProvider
+        // delete tradeableAmountByTokenByProvider[_msgSender()];
         delete providers[_msgSender()];
         registeredProvidersCount--;
     }
@@ -228,9 +233,9 @@ contract P2pEx is Ownable {
     }
 //*************************************************//
 
-//           autoCompleteTimeLimit Start            //
+//            autoCompleteTimeLimit                //
     function updateTimeLimit(int _timeLimit) public onlyProvider {
-        require(_timeLimit <= 4, LTE_TO_4HOURS);
+        require(_timeLimit <= maxTimeLimit, LTD_TO_4HOURS);
         providers[_msgSender()].autoCompleteTimeLimit = _timeLimit;
     }
 //*************************************************//
@@ -239,6 +244,10 @@ contract P2pEx is Ownable {
 
     function getPymtMthds(address _provider) public view isProvider(_provider) returns (string[][] memory) { // TESTED
         return providers[_provider].paymtMthds;
+    }
+
+    function getPymtMthd(address _provider, uint8 _mthdIndex) public view isProvider(_provider) hasPymtMthd(_mthdIndex) returns (string[] memory) {
+        return providers[_provider].paymtMthds[_mthdIndex];
     }
 
     /**
@@ -282,17 +291,17 @@ contract P2pEx is Ownable {
     }
 //*************************************************//
 
-//              currTradedTokens CRUD              //
+//              currTradedTokens CRUD              // TESTED
 
-    function getCurrTradedTokens(address _provider) external view returns (address[] memory) {
+    function getCurrTradedTokens(address _provider) external view returns (address[] memory) {// TESTED
         return providers[_provider].currTradedTokens;
     }
 
-    function getCurrTradedTokenIndex(address _token, address _provider) public view isProvider(_provider) isCurrTraded(_token) returns (uint) {
-        return idxOfCurrTradedTokensByProvider[_provider][_token] - 1;
+    function getCurrTradedTokenIndex(address _token, address _provider) public view isProvider(_provider) isCurrTraded(_token, _provider) returns (uint) {
+        return idxOfCurrTradedTokensByProvider[_provider][_token] - 1;// TESTED
     }
 
-    function addToCurrTradedTokens(address _token) public onlyProvider {
+    function addToCurrTradedTokens(address _token) public onlyProvider isTradeable(_token) {// TESTED
         if (idxOfCurrTradedTokensByProvider[_msgSender()][_token] == 0) {//Not yet added
             address[] storage tknLst = providers[_msgSender()].currTradedTokens;
             tknLst.push(_token);
@@ -300,16 +309,11 @@ contract P2pEx is Ownable {
         }
     }
 
-    function removeFromCurrTradedTokens(address _token) public onlyProvider isCurrTraded(_token) {
+    function removeFromCurrTradedTokens(address _token) public onlyProvider isCurrTraded(_token, _msgSender()) {// TESTED
         address[] storage tknLst = providers[_msgSender()].currTradedTokens;
         tknLst[getCurrTradedTokenIndex(_token, _msgSender())] = tknLst[tknLst.length - 1];
         tknLst.pop();
         delete idxOfCurrTradedTokensByProvider[_msgSender()][_token]; 
-    }
-
-    modifier isCurrTraded(address _token) {
-        require(idxOfCurrTradedTokensByProvider[_msgSender()][_token] != 0, TOKEN_ERROR);
-        _;
     }
 
 //*************************************************//
@@ -364,15 +368,13 @@ contract P2pEx is Ownable {
 //*************************************************//
 
 //*************************************************//
-//               tradeableTokens CRUD             //
-
-//*************************************************//
 
     function balanceOf(address _token) public view returns (uint256){
         return IERC20(_token).balanceOf(address(this));
     }
 
-    function getTradeableAmountByTokenByProvider(address _token, address _provider) public view returns (uint){
+    function getTradeableAmountByTokenByProvider(address _token, address _provider) public view 
+            isProvider(_provider) isCurrTraded(_token, _provider) returns (uint){
         return tradeableAmountByTokenByProvider[_provider][_token];
     }
 
@@ -383,8 +385,8 @@ contract P2pEx is Ownable {
      */
     function depositToTrade(address _token, uint _tradeAmount) external payable onlyProvider isTradeable(_token) {
         require(IERC20(_token).transferFrom(_msgSender(), address(this), _tradeAmount), TRANSFER_FAILED);
-        tradeableAmountByTokenByProvider[_msgSender()][_token] += _tradeAmount;
         addToCurrTradedTokens(_token); // Only added if new
+        tradeableAmountByTokenByProvider[_msgSender()][_token] += _tradeAmount;
     }
 
     function isInTheReservoir() public pure returns (bool) {
@@ -414,4 +416,31 @@ contract P2pEx is Ownable {
         ( , int256 price, , , ) = AggregatorV3Interface(_priceFeed).latestRoundData();
         return price;
     }
+
+
+//*************************************************//
+// Transaction flow between Receiver and Provider //
+
+    enum Status {
+        InProgress,
+        Completed,
+        Cancelled,
+        Disputed
+    }
+
+    struct Order {
+        address receiver;
+        address provider;
+        uint8 pmtMthdIdx;
+        uint amountPaid;
+        bytes fiatUsed;
+        bytes cryptoToSend;
+        Status status;
+    }
+
+    function initiateOrder(address _receiver, address _provider, uint8 _pmtMthdIdx, uint _amountPaid, bytes calldata fiatUsed, bytes calldata cryptoToSend) 
+            public isProvider(_provider) hasPymtMthd(_pmtMthdIdx) {
+        
+    }
+
 }

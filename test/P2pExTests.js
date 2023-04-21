@@ -43,7 +43,7 @@ describe("P2pEx contract", function () {
   async function deployP2pExFixture() {
     // Get the ContractFactory and Signers here.
     const P2pEx = await ethers.getContractFactory("P2pEx");
-    const [p2pExOwner, tstOwner, addr1, addr2] = await ethers.getSigners();
+    const [p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2] = await ethers.getSigners();
 
     const p2pExContract = await P2pEx.deploy();
     await p2pExContract.deployed();
@@ -54,7 +54,7 @@ describe("P2pEx contract", function () {
     await tstTokenContract.deployed()
 
     // Fixtures can return anything you consider useful for your tests
-    return { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 };
+    return { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 };
   }
 
   // You can nest describe calls to create subsections.
@@ -96,7 +96,7 @@ describe("P2pEx contract", function () {
 
   //Fixture to deploy P2pEx, seed the wallets, and deposit in P2pEx contract
   async function deployAndDepositInP2pEx() {
-    const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+    const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
     await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
     await addProviders(p2pExContract, p2pExOwner, tstOwner, addr1);
     await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
@@ -104,7 +104,7 @@ describe("P2pEx contract", function () {
     await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, p2pExOwner);
     await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 200, addr1);
 
-    return { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 };
+    return { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 };
   }
 
   describe("Providers CRUD functions", function () {
@@ -465,6 +465,120 @@ describe("P2pEx contract", function () {
         });
       });
     });
+
+    describe("provider.currTradedTokens CRUD", function () {
+      describe("addToCurrTradedTokens(_newToken)", function () {
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(addr1).addToCurrTradedTokens(tstTokenContract.address)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should revert if token is not tradeable", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+          
+          await expect(p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address)).to.be.revertedWith(TOKEN_ERROR);
+        });
+  
+        it("Should not add _token again of already currently traded", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
+          
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn1.address);
+          let lstLength = (await p2pExContract.getCurrTradedTokens(tstOwner.address)).length;
+
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn1.address);
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address)).length).to.be.equal(lstLength);
+        });
+  
+        it("Should add token to currTradedTokens and idxOfCurrTradedTokensByProvider mapping", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
+          
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn1.address);
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
+  
+          let mockTkn1Idx = await p2pExContract.getCurrTradedTokenIndex(mockTkn1.address, tstOwner.address);
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[mockTkn1Idx]).to.be.equal(mockTkn1.address);
+        });
+      });
+  
+      describe("getCurrTradedTokenIndex(_token, _provider)", function () {
+        it("Should revert if _provider address is not a provider", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.getCurrTradedTokenIndex(tstTokenContract.address, tstOwner.address)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+
+        it("Should revert if _token is not currently traded by _provider", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+          
+          await expect(p2pExContract.getCurrTradedTokenIndex(tstTokenContract.address, tstOwner.address)).to.be.revertedWith(TOKEN_ERROR);
+        });
+  
+        it("Should return the index matching currTradedTokens", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn2.address);
+          
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn1.address);
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn2.address);
+  
+          let tstIdx = await p2pExContract.getCurrTradedTokenIndex(tstTokenContract.address, tstOwner.address);
+          let mockTkn1Idx = await p2pExContract.getCurrTradedTokenIndex(mockTkn1.address, tstOwner.address);
+          let mockTkn2Idx = await p2pExContract.getCurrTradedTokenIndex(mockTkn2.address, tstOwner.address);
+  
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[tstIdx]).to.be.equal(tstTokenContract.address);
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[mockTkn1Idx]).to.be.equal(mockTkn1.address);
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[mockTkn2Idx]).to.be.equal(mockTkn2.address);
+        });
+      });
+
+      describe("removeFromCurrTradedTokens(_token)", function () {
+        it("Should revert if provider matching msg.sender is not found", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          
+          await expect(p2pExContract.connect(addr1).removeFromCurrTradedTokens(tstTokenContract.address)).to.be.revertedWith(PROVIDER_ERROR);
+        });
+  
+        it("Should revert if _token is not currently traded", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+
+          await expect(p2pExContract.connect(tstOwner).removeFromCurrTradedTokens(tstTokenContract.address)).to.be.revertedWith(TOKEN_ERROR);
+        });
+  
+        it("Should remove token from currTradedTokens and idxOfCurrTradedTokensByProvider mapping", async function () {
+          const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+          await p2pExContract.connect(tstOwner).addProvider();
+
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+          await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
+          
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(mockTkn1.address);
+          await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
+  
+          let mockTkn1Idx = await p2pExContract.getCurrTradedTokenIndex(mockTkn1.address, tstOwner.address);
+          await p2pExContract.connect(tstOwner).removeFromCurrTradedTokens(mockTkn1.address);
+
+          await expect(p2pExContract.getCurrTradedTokenIndex(mockTkn1.address, tstOwner.address)).to.be.revertedWith(TOKEN_ERROR);
+          expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[mockTkn1Idx]).to.not.be.equal(mockTkn1.address);
+        });
+      });
+    });
   });
 
   describe("Contract's tradeable tokens", function () {
@@ -483,9 +597,9 @@ describe("P2pEx contract", function () {
       });
 
       it("Should add token to tradeableTokensLst and tradeableTokens mapping", async function () {
-        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
         
-        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr1.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
         await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
 
         let tstIdx = await p2pExContract.getTradeableTokenIndex(tstTokenContract.address);
@@ -501,38 +615,37 @@ describe("P2pEx contract", function () {
       });
 
       it("Should return the index matchin tradeableTokensLst", async function () {
-        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2 } = await loadFixture(deployP2pExFixture);
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, addr2, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
         
         await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
-        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr1.address);
-        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(addr2.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn1.address);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(mockTkn2.address);
 
         let tstIdx = await p2pExContract.getTradeableTokenIndex(tstTokenContract.address);
-        let addr1Idx = await p2pExContract.getTradeableTokenIndex(addr1.address);
-        let addr2Idx = await p2pExContract.getTradeableTokenIndex(addr2.address);
+        let mockTkn1Idx = await p2pExContract.getTradeableTokenIndex(mockTkn1.address);
+        let mockTkn2Idx = await p2pExContract.getTradeableTokenIndex(mockTkn2.address);
 
         expect((await p2pExContract.getTradeableTokensLst())[tstIdx]).to.be.equal(tstTokenContract.address);
-        expect((await p2pExContract.getTradeableTokensLst())[addr1Idx]).to.be.equal(addr1.address);
-        expect((await p2pExContract.getTradeableTokensLst())[addr2Idx]).to.be.equal(addr2.address);
+        expect((await p2pExContract.getTradeableTokensLst())[mockTkn1Idx]).to.be.equal(mockTkn1.address);
+        expect((await p2pExContract.getTradeableTokensLst())[mockTkn2Idx]).to.be.equal(mockTkn2.address);
       });
     });
   });
 
   describe("depositToTrade(_token, _tradeAmount)", function () {
-    it("Should revert if _token is not in p2pExContract's tradeableTokens list.", async function () {
+    it("Should revert if provider matching msg.sender is not found", async function () {
       const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
-      await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
       await tstTokenContract.connect(tstOwner).approve(p2pExContract.address, 100);
 
       await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
     });
 
-    it("Should revert if provider matching msg.sender is not found", async function () {
+    it("Should revert if _token is not in p2pExContract's tradeableTokens list.", async function () {
       const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
-      await seedOtherWallets(tstTokenContract, tstOwner, 300, p2pExOwner, addr1);
+      await p2pExContract.connect(tstOwner).addProvider();
       await tstTokenContract.connect(tstOwner).approve(p2pExContract.address, 100);
 
-      await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(PROVIDER_ERROR);
+      await expect(p2pExContract.connect(tstOwner).depositToTrade(tstTokenContract.address, 100)).to.be.revertedWith(TOKEN_ERROR);
     });
 
     it("Should increase p2pExContract balance of _token by _tradeAmount", async function () {
@@ -557,6 +670,7 @@ describe("P2pEx contract", function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
         await p2pExContract.connect(tstOwner).addProvider();
         await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+        await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
 
         balanceBefore = await p2pExContract.getTradeableAmountByTokenByProvider(tstTokenContract.address, tstOwner.address);
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
