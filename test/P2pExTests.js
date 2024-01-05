@@ -197,9 +197,9 @@ describe("P2pEx contract", function () {
     });
 
     describe("provider.paymtMthds CRUD", function () {
-      //always length of 3: [_name, _acceptedCurrencies, _transferInfo]
-      const mockPymtMthd1 = ["payment method", "currencies accepted", "transfer details"];
-      const mockPymtMthd2 = ["Google pay", "MAD USD CNY EUR", "send to this address: test@gmail.com"];
+      //always length of 3: [_name, _acceptedCurrency, _transferInfo]
+      const mockPymtMthd1 = ["payment method", "currency accepted", "transfer details"];
+      const mockPymtMthd2 = ["Google pay", "USD", "send to this address: test@gmail.com"];
 
       describe("getPymtMthds(address _provider)", function () {
         it("Should revert if provider is not found", async function () {
@@ -666,16 +666,154 @@ describe("P2pEx contract", function () {
         expect(await p2pExContract.balanceOf(tstTokenContract.address)).to.equal(balanceBefore + 450);
     });
 
-    it("Should increase provider tradeable amount of _token by _tradeAmount. Mapping is tradeableAmountByTokenByProvider", async function () {
+    it("If new token for provider, should add it to provider.currTradedTokens and idxOfCurrTradedTokensByProvider mapping.", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
+        await p2pExContract.connect(tstOwner).addProvider();
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+
+        await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
+  
+        let tstTknIdx = await p2pExContract.getCurrTradedTokenIndex(tstTokenContract.address, tstOwner.address);
+        expect((await p2pExContract.getCurrTradedTokens(tstOwner.address))[tstTknIdx]).to.be.equal(tstTokenContract.address);
+    });
+
+    it("Should increase provider deposited amount of _token by _tradeAmount. Mapping is tradeableAmountByTokenByProvider", async function () {
         const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1 } = await loadFixture(deployP2pExFixture);
         await p2pExContract.connect(tstOwner).addProvider();
         await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
         await p2pExContract.connect(tstOwner).addToCurrTradedTokens(tstTokenContract.address);
 
-        balanceBefore = await p2pExContract.getTradeableAmountByTokenByProvider(tstTokenContract.address, tstOwner.address);
+        balanceBefore = await p2pExContract.getDepositedAmountByTokenByProvider(tstTokenContract.address, tstOwner.address);
         await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 100, tstOwner);
         
-        expect(await p2pExContract.getTradeableAmountByTokenByProvider(tstTokenContract.address, tstOwner.address)).to.be.equal(balanceBefore + 100);
+        expect(await p2pExContract.getDepositedAmountByTokenByProvider(tstTokenContract.address, tstOwner.address)).to.be.equal(balanceBefore + 100);
+    });
+  });
+
+  describe("Order tests", function () {
+    const pymtMthdIdx = 0;
+    const amntPaid = 100;
+    const currUsed = "USD";
+    const amntToSend = 5;
+    const mockPymtMthd1 = ["payment method", "currency accepted", "transfer details"];
+    const mockPymtMthd2 = ["Google pay", "USD", "send to this address: test@gmail.com"];
+    
+    describe("initiateOrder(address _receiver, address _provider, uint8 _pmtMthdIdx, uint _amountPaid, address cryptoToSend, uint _cryptoAmountToSend)", function () {
+      it("Should revert if _provider is not found", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+
+        await expect(p2pExContract.connect(addr1)
+          .initiateOrder(tstOwner.address, pymtMthdIdx, amntPaid, tstTokenContract.address, amntToSend))
+          .to.be.revertedWith(PROVIDER_ERROR);
+      });
+
+      it("Should revert if provider not available", async function () {
+        
+      });
+
+      it("Should revert if _pmtMthdIdx is not found", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+        await p2pExContract.connect(tstOwner).addProvider();
+
+        await expect(p2pExContract.connect(addr1)
+          .initiateOrder(tstOwner.address, pymtMthdIdx, amntPaid, tstTokenContract.address, amntToSend))
+          .to.be.revertedWith(PYMT_MTHD_ERROR);
+      });
+
+      it("Should revert if _cryptoAmountToSend higher than amount available to trade", async function () {
+        const { p2pExContract, tstTokenContract, p2pExOwner, tstOwner, addr1, mockTkn1, mockTkn2 } = await loadFixture(deployP2pExFixture);
+        await p2pExContract.connect(tstOwner).addProvider();
+
+        await p2pExContract.connect(tstOwner).addPaymtMthd(mockPymtMthd2);
+        await p2pExContract.connect(p2pExOwner).makeTokenTradeable(tstTokenContract.address);
+        await approveAndDepositInP2pEx(p2pExContract, tstTokenContract, 3, tstOwner);
+
+        await expect(p2pExContract.connect(addr1)
+          .initiateOrder(tstOwner.address, pymtMthdIdx, amntPaid, tstTokenContract.address, amntToSend))
+          .to.be.revertedWith(BALANCE_ERROR);
+      });
+
+      it("Should create a new order with status InProgress", async function () {
+        
+      });
+
+      it("Should increase ordersCount by 1", async function () {
+        
+      });
+
+      it("Should add order to ordersLst with index being ordersCount", async function () {
+        
+      });
+    });
+
+    describe("completeOrder(uint orderIndex)", function () {
+      it("Should revert if order is not found", async function () {
+        
+      });
+
+      it("Should revert if _msgSender() is not the order provider", async function () {
+        
+      });
+
+      it("Should revert if Order.status is not Status.InProgress", async function () {
+        
+      });
+
+      it("Should tranfer Order.cryptoAmountToSend to Order.receiver address", async function () {
+        
+      });
+
+      it("Should decrease depositedAmountByTokenByProvider[Order.provider][Order.cryptoToSend] by Order.cryptoAmountToSend", async function () {
+        
+      });
+
+      it("Should change Order.status to status.Completed", async function () {
+        
+      });
+    });
+
+    describe("cancelOrder(uint orderIndex)", function () {
+      it("Should revert if order is not found", async function () {
+        
+      });
+
+      it("Should revert if _msgSender() doesn't match Order.receiver", async function () {
+        
+      });
+
+      it("Should revert if order is already cancelled", async function () {
+        
+      });
+
+      it("Should revert if Order.status is Status.DisputedWithMod", async function () {
+        
+      });
+
+      it("Should change Order.status to status.Cancelled", async function () {
+        
+      });
+    });
+
+    describe("disputeOrder(uint orderIndex)", function () {
+      it("Should revert if order is not found", async function () {
+        
+      });
+
+      it("Should revert if _msgSender() doesn't match Order.receiver", async function () {
+        
+      });
+
+      it("Should revert if order is already cancelled", async function () {
+        
+      });
+
+      it("Should revert if Order.status is Status.DisputedWithMod", async function () {
+        
+      });
+
+      it("Should change Order.status to status.Cancelled", async function () {
+        
+      });
     });
   });
 
